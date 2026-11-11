@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>RNO Site Analyzer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f1f5f9; --accent:#2563eb;
+          --danger:#b91c1c; --danger-bg:#fee2e2; --serving:#dcfce7; --cand:#fef9c3; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif; font-size:15px;
+         color:var(--ink); background:var(--bg); padding-bottom:env(safe-area-inset-bottom,0px); }
+  header { position:sticky; top:0; z-index:500; display:flex; justify-content:space-between; align-items:center;
+           gap:8px; padding:10px 12px; padding-top:calc(10px + env(safe-area-inset-top,0px));
+           background:#0f172a; color:#e2e8f0; }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; }
+  #db-badge { font-size:12px; color:#94a3b8; text-align:right; }
+  main { padding:10px; display:flex; flex-direction:column; gap:10px; max-width:720px; margin:0 auto; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .card h2 { font-size:15px; margin:0 0 8px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+  input, select { font:inherit; font-size:16px; padding:9px 10px; border:1px solid var(--line); border-radius:8px;
+                  width:100%; color:var(--ink); background:#fff; }
+  button { font:inherit; font-size:15px; padding:10px 12px; border:none; border-radius:8px; background:var(--accent);
+           color:#fff; cursor:pointer; }
+  button.secondary { background:#e2e8f0; color:var(--ink); }
+  button.full { width:100%; margin-top:8px; }
+  button:disabled { opacity:.5; }
+  .row2, .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+  .hint { font-size:12px; color:var(--muted); margin:6px 0 0; }
+  .muted { color:var(--muted); font-size:13px; }
+  .error { background:var(--danger-bg); color:var(--danger); border-radius:8px; padding:10px; white-space:pre-wrap; }
+  details { margin-top:8px; border:1px solid var(--line); border-radius:8px; padding:8px; }
+  summary { cursor:pointer; color:var(--muted); }
+  #map { height:55vh; min-height:300px; border-radius:10px; border:1px solid var(--line); }
+  #cap-preview { display:block; max-width:100%; max-height:280px; margin:8px auto; border-radius:8px;
+                 border:1px solid var(--line); object-fit:contain; }
+  .kv { display:grid; grid-template-columns:130px 1fr; gap:4px 8px; font-size:14px; }
+  .kv div:nth-child(odd) { color:var(--muted); }
+  .nd { color:var(--danger); font-weight:600; }
+  .ocr-table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
+  .ocr-table td { padding:4px; border-bottom:1px solid var(--line); }
+  .ocr-table td.v { font-family:Consolas,monospace; }
+  .ocr-warn { font-size:12px; color:#92400e; margin:6px 0 0 16px; padding:0; }
+  pre { white-space:pre-wrap; font-size:11px; background:#f8fafc; padding:6px; border-radius:6px; max-height:180px; overflow:auto; }
+  .res { border:1px solid var(--line); border-radius:8px; padding:8px; margin-top:6px; font-size:13px; }
+  .res.serving { background:var(--serving); }
+  .res.candidate { background:var(--cand); }
+  .res .title { font-weight:600; }
+  .res .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .res-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .cell-label { background:rgba(255,255,255,.9); border:1px solid #94a3b8; border-radius:4px; padding:0 3px;
+                font-size:11px; white-space:nowrap; transform:translate(-50%,-50%); }
+  .actions { display:flex; gap:8px; }
+  .actions button { flex:1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RNO Site Analyzer</h1>
+  <span id="db-badge">Belum ada database</span>
+</header>
+
+<main>
+  <section class="card">
+    <h2>1. Database</h2>
+    <p class="hint">Upload <code>gcell_mobile.json</code> (dibuat dari PC dengan <code>export_for_phone.py</code>). Data hanya disimpan di HP ini.</p>
+    <input type="file" id="db-file" accept=".json,application/json">
+    <p id="db-info" class="muted"></p>
+    <button id="db-clear" class="secondary full" hidden>Hapus database dari HP</button>
+  </section>
+
+  <section class="card">
+    <h2>2. Lokasi</h2>
+    <label>Koordinat gabungan (lat, lon)
+      <input id="coord-text" placeholder="-6.4276412106943095, 106.80711552313315" autocomplete="off">
+    </label>
+    <div class="row2">
+      <label>Longitude <input id="lon" inputmode="decimal" autocomplete="off"></label>
+      <label>Latitude <input id="lat" inputmode="decimal" autocomplete="off"></label>
+    </div>
+    <p id="coord-hint" class="hint"></p>
+    <button id="geo-btn" class="secondary full">Gunakan lokasi HP saat ini</button>
+    <div class="row2">
+      <label>Radius
+        <select id="radius">
+          <option value="100">100 m</option><option value="200">200 m</option><option value="300">300 m</option>
+          <option value="500">500 m</option><option value="750">750 m</option><option value="1000" selected>1 km (maks)</option>
+        </select>
+      </label>
+      <label>Teknologi
+        <select id="tech"><option>All</option><option>4G</option><option>5G</option></select>
+      </label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>3. Screenshot GNetTrack</h2>
+    <input type="file" id="cap-file" accept="image/*" capture="environment">
+    <img id="cap-preview" alt="Screenshot GNetTrack" hidden>
+    <p id="ocr-status" class="muted"></p>
+    <div id="ocr-result"></div>
+    <details>
+      <summary>Field serving (bisa dikoreksi)</summary>
+      <div class="grid2">
+        <label>eNB ID <input id="f_enb_id" inputmode="numeric"></label>
+        <label>CID (Local Cell ID) <input id="f_local_cell_id" inputmode="numeric"></label>
+        <label>EARFCN LTE <input id="f_earfcn" inputmode="numeric"></label>
+        <label>PCI LTE <input id="f_pci_lte" inputmode="numeric"></label>
+        <label>PCI NR <input id="f_nr_pci" inputmode="numeric"></label>
+        <label>NR-ARFCN (DL) <input id="f_dl_arfcn" inputmode="numeric"></label>
+        <label>GPS Longitude <input id="f_gps_lon" inputmode="decimal"></label>
+        <label>GPS Latitude <input id="f_gps_lat" inputmode="decimal"></label>
+      </div>
+      <p class="hint">Kosongkan field yang tidak terbaca. Field kosong tidak dianggap cocok.</p>
+    </details>
+    <details>
+      <summary>Teks mentah OCR</summary>
+      <pre id="ocr-raw"></pre>
+    </details>
+  </section>
+
+  <section class="card">
+    <h2>4. Sektor (opsional)</h2>
+    <label>Radius sektor (m), kosong = dari kolom RADIUS database
+      <input id="sector-radius" inputmode="numeric" placeholder="kosong">
+    </label>
+  </section>
+
+  <div class="actions"><button id="search-btn">CARI</button></div>
+
+  <section class="card"><div id="map"></div></section>
+  <section class="card" id="summary"><h2>Ringkasan</h2><p class="muted">Belum ada pencarian.</p></section>
+  <section class="card">
+    <div class="res-head">
+      <h2>Hasil</h2>
+      <button id="csv-btn" class="secondary" hidden>Unduh CSV</button>
+    </div>
+    <div id="notes"></div>
+    <div id="results"></div>
+  </section>
+  <div id="error" class="error" hidden></div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+// CORE-START
+// Logika murni (tanpa DOM). Mengikuti modul Python: coordinate_processor, site_matcher, sector_visualizer, gnettrack_ocr.
+
+const EARTH_R = 6371008.8;
+const LAT_RANGE = [-11, 6], LON_RANGE = [95, 141];
+const MAX_SEARCH = 1000, DEFAULT_SECTOR_M = 300, MIN_SECTOR_M = 20, MAX_SECTOR_M = 2000;
+const ST = { CONF: "Confirmed", NOTCONF: "Serving Cell Match Not Confirmed", NOTDB: "Not in Database", ND: "Not Detected" };
+const RANGES = { enb_id:[1,9999999], local_cell_id:[0,255], earfcn:[0,70000], pci_lte:[0,503], nr_pci:[0,1007], dl_arfcn:[0,3279165] };
+
+const toRad = d => d * Math.PI / 180;
+const toDeg = r => r * 180 / Math.PI;
+const round1 = x => Math.round(x * 10) / 10;
+
+function haversine(lon1, lat1, lon2, lat2) {
+  const p1 = toRad(lat1), p2 = toRad(lat2), dp = p2 - p1, dl = toRad(lon2 - lon1);
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * EARTH_R * Math.asin(Math.min(1, Math.sqrt(Math.max(0, a))));
+}
+
+function bearingDeg(lon1, lat1, lon2, lat2) {
+  const p1 = toRad(lat1), p2 = toRad(lat2), dl = toRad(lon2 - lon1);
+  const x = Math.sin(dl) * Math.cos(p2);
+  const y = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl);
+  return (toDeg(Math.atan2(x, y)) + 360) % 360;
+}
+
+function destination(lon, lat, brg, dist) {
+  const d = dist / EARTH_R, b = toRad(brg), p1 = toRad(lat), l1 = toRad(lon);
+  const s2 = Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b);
+  const p2 = Math.asin(Math.max(-1, Math.min(1, s2)));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * s2);
+  return [(toDeg(l2) + 540) % 360 - 180, toDeg(p2)];   // [lon, lat]
+}
+
+function sectorPolygon(lon, lat, az, bw, radius, steps = 24) {
+  const pts = [[lat, lon]];
+  const start = az - bw / 2, step = bw / steps;
+  for (let i = 0; i <= steps; i++) {
+    const [x, y] = destination(lon, lat, (start + i * step + 720) % 360, radius);
+    pts.push([y, x]);
+  }
+  pts.push([lat, lon]);
+  return pts;
+}
+
+function directionLine(lon, lat, az, len = 0.6) {
+  const [x, y] = destination(lon, lat, az, len);
+  return [[lat, lon], [y, x]];
+}
+
+// ---- Koordinat ----
+function validateCoord(lon, lat) {
+  if (LON_RANGE[0] <= lat && lat <= LON_RANGE[1] && LAT_RANGE[0] <= lon && lon <= LAT_RANGE[1]) {
+    throw new Error("Longitude dan latitude tampaknya tertukar. Longitude Indonesia sekitar 95-141, latitude sekitar -11 sampai 6.");
+  }
+  if (!(lon >= -180 && lon <= 180)) throw new Error(`Longitude ${lon} di luar rentang -180 sampai 180.`);
+  if (!(lat >= -90 && lat <= 90)) throw new Error(`Latitude ${lat} di luar rentang -90 sampai 90.`);
+  if (!(lon >= LON_RANGE[0] && lon <= LON_RANGE[1] && lat >= LAT_RANGE[0] && lat <= LAT_RANGE[1])) {
+    throw new Error(`Koordinat (${lon}, ${lat}) di luar wilayah Indonesia. Periksa kembali input.`);
+  }
+  return { lon, lat };
+}
+
+function parseCoordText(text) {
+  if (!text || !String(text).trim()) throw new Error("Koordinat kosong.");
+  const nums = String(text).replace(/;/g, ",").match(/[-+]?\d+(?:\.\d+)?/g) || [];
+  if (nums.length !== 2) throw new Error("Koordinat harus berisi dua angka dengan titik desimal, contoh: -6.4276412106943095, 106.80711552313315");
+  const a = parseFloat(nums[0]), b = parseFloat(nums[1]);
+  let lon, lat;
+  if (LAT_RANGE[0] <= a && a <= LAT_RANGE[1] && LON_RANGE[0] <= b && b <= LON_RANGE[1]) { lat = a; lon = b; }
+  else if (LON_RANGE[0] <= a && a <= LON_RANGE[1] && LAT_RANGE[0] <= b && b <= LAT_RANGE[1]) { lon = a; lat = b; }
+  else throw new Error("Tidak dapat membedakan latitude dan longitude. Periksa koordinat yang dimasukkan.");
+  return validateCoord(lon, lat);
+}
+
+function parseNumberField(text, label, { integer = false } = {}) {
+  if (text === null || text === undefined || String(text).trim() === "") return null;
+  const t = String(text).trim();
+  const n = integer ? (/^[-+]?\d+$/.test(t) ? parseInt(t, 10) : NaN) : parseFloat(t);
+  if (!Number.isFinite(n)) throw new Error(`${label} harus berupa angka${integer ? " bulat" : ""}.`);
+  return n;
+}
+
+// ---- Indeks database ----
+function median(values) {
+  const v = values.filter(x => Number.isFinite(x)).sort((a, b) => a - b);
+  if (!v.length) return NaN;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+function buildIndex(payload) {
+  const cells = [];
+  for (const tech of ["4G", "5G"]) {
+    for (const r of (payload[tech] || [])) {
+      if (!Number.isFinite(r.lo) || !Number.isFinite(r.la) || r.s == null) continue;
+      cells.push({
+        tech, site: String(r.s), siteName: r.sn ?? null, name: r.n ?? "",
+        enb: r.e ?? null, lcid: r.lc ?? null, gnb: r.g ?? null, nrcid: r.nc ?? null,
+        pci: r.p ?? null, earfcn: r.ef ?? null, dl: r.dl ?? null,
+        az: r.az ?? null, azv: !!r.azv, bw: r.bw ?? null, bwv: !!r.bwv,
+        rk: r.rk ?? null, ind: !!r.ind, lo: r.lo, la: r.la, src: cells.length,
+      });
+    }
+  }
+  const bySite = new Map();
+  for (const c of cells) {
+    if (!bySite.has(c.site)) bySite.set(c.site, []);
+    bySite.get(c.site).push(c);
+  }
+  const sites = [];
+  const siteById = new Map();
+  for (const [id, list] of bySite) {
+    const s = {
+      id, name: (list.find(c => c.siteName) || {}).siteName ?? null,
+      lon: median(list.map(c => c.lo)), lat: median(list.map(c => c.la)),
+    };
+    sites.push(s);
+    siteById.set(id, s);
+  }
+  return { cells, sites, siteById };
+}
+
+// ---- Serving ----
+function match4g(cells, enb, lcid, earfcn, pci) {
+  if (enb == null || lcid == null) return [ST.ND, []];
+  const c4 = cells.filter(c => c.tech === "4G" && c.enb === enb && c.lcid === lcid);
+  if (!c4.length) return [ST.NOTDB, []];
+  let ex = c4;
+  if (earfcn != null) ex = ex.filter(c => c.earfcn === earfcn);
+  if (pci != null) ex = ex.filter(c => c.pci === pci);
+  if (ex.length === 1) return [ST.CONF, ex];
+  return [ST.NOTCONF, ex.length > 1 ? ex : c4];
+}
+
+function match5g(cells, nrPci, gnb, nrcid, dl, anchor, candidates) {
+  const c5 = cells.filter(c => c.tech === "5G");
+  if (gnb != null && nrcid != null) {
+    const pair = c5.filter(c => c.gnb === gnb && c.nrcid === nrcid);
+    if (pair.length === 1) return [ST.CONF, pair, null];
+    if (pair.length > 1 && anchor != null) {
+      const narrowed = pair.filter(c => c.site === anchor);
+      if (narrowed.length === 1) return [ST.CONF, narrowed, null];
+    }
+    if (pair.length > 1) return [ST.NOTCONF, pair, "Pasangan gNB ID dan NR Cell ID dipakai di lebih dari satu site. Diperlukan site anchor."];
+  }
+  if (nrPci == null) return [ST.ND, [], null];
+  if (anchor == null) {
+    const pool = c5.filter(c => candidates.includes(c.site) && c.pci === nrPci);
+    return [ST.NOTCONF, pool, "Anchor 4G belum Confirmed. Cell 5G hanya ditampilkan sebagai kandidat berdasarkan PCI."];
+  }
+  const siteCells = c5.filter(c => c.site === anchor);
+  if (!siteCells.length) return [ST.NOTDB, [], "Site anchor 4G tidak memiliki cell 5G di database."];
+  const m = siteCells.filter(c => c.pci === nrPci);
+  if (m.length === 1) return [ST.CONF, m, null];
+  if (m.length > 1 && dl != null) {
+    const m2 = m.filter(c => c.dl === dl);
+    if (m2.length === 1) return [ST.CONF, m2, null];
+  }
+  if (m.length === 0) return [ST.NOTCONF, siteCells, "PCI 5G tidak cocok dengan cell mana pun di site anchor. Kandidat: semua cell 5G di site tersebut."];
+  return [ST.NOTCONF, m, "PCI 5G dipakai lebih dari satu cell di site anchor dan tidak dapat dipisahkan."];
+}
+
+function identifyServing(index, serving, nearbyIds) {
+  const out = { st4: null, c4: [], st5: null, c5: [], siteId: null, notes: [] };
+  if (!serving) return out;
+  const [st4, c4] = match4g(index.cells, serving.enb_id, serving.local_cell_id, serving.earfcn, serving.pci_lte);
+  out.st4 = st4; out.c4 = c4;
+  const anchor = st4 === ST.CONF ? c4[0].site : null;
+  const [st5, c5, note5] = match5g(index.cells, serving.nr_pci, serving.gnb_id, serving.nr_cell_id,
+                                   serving.dl_arfcn, anchor, nearbyIds);
+  out.st5 = st5; out.c5 = c5;
+  if (note5) out.notes.push(note5);
+
+  if (st5 === ST.CONF && serving.dl_arfcn != null && c5[0].dl != null && c5[0].dl !== serving.dl_arfcn) {
+    out.notes.push(`NR-ARFCN GNetTrack ${serving.dl_arfcn} berbeda ${Math.abs(c5[0].dl - serving.dl_arfcn)} dari database ${c5[0].dl}. Dicatat, tidak dipakai sebagai syarat pencocokan.`);
+  }
+  if (st4 === ST.CONF) out.siteId = c4[0].site;
+  if (st5 === ST.CONF) {
+    const s5 = c5[0].site;
+    if (out.siteId == null) out.siteId = s5;
+    else if (s5 !== out.siteId) out.notes.push("Serving 4G dan 5G berada di site berbeda. Periksa data.");
+  }
+  return out;
+}
+
+// ---- Analisis titik ----
+function outsideLabel(radius) {
+  return radius === 1000 ? "Outside 1 KM Search Radius" : `Outside ${radius} M Search Radius`;
+}
+
+function cellId(c) {
+  if (c.tech === "4G") return c.enb != null && c.lcid != null ? `${c.enb}-${c.lcid}` : c.name;
+  return c.gnb != null && c.nrcid != null ? `${c.gnb}-${c.nrcid}` : c.name;
+}
+
+function sectorRadiusFor(cell, override) {
+  if (override != null) return [override, "Input manual"];
+  if (cell.rk != null) {
+    const m = cell.rk * 1000;
+    if (m >= MIN_SECTOR_M && m <= MAX_SECTOR_M) return [m, "Database (RADIUS)"];
+  }
+  return [DEFAULT_SECTOR_M, `Default ${DEFAULT_SECTOR_M} m`];
+}
+
+function analyzePoint(index, lon, lat, radius, tech, serving, opts = {}) {
+  const dist = new Map(index.sites.map(s => [s.id, haversine(lon, lat, s.lon, s.lat)]));
+  const cellsF = tech === "All" ? index.cells : index.cells.filter(c => c.tech === tech);
+  const withCells = new Set(cellsF.map(c => c.site));
+  const nearby = index.sites
+    .filter(s => dist.get(s.id) <= radius && withCells.has(s.id))
+    .sort((a, b) => dist.get(a.id) - dist.get(b.id));
+  const nearbyIds = nearby.map(s => s.id);
+
+  const serv = identifyServing(index, serving, nearbyIds);
+
+  let servingSite = null;
+  if (serv.siteId != null) {
+    const s = index.siteById.get(serv.siteId);
+    const d = dist.get(s.id);
+    servingSite = {
+      site_id: s.id, site_name: s.name, dist_m: round1(d), lat: s.lat, lon: s.lon,
+      outside: d > radius, label: d > radius ? outsideLabel(radius) : "",
+    };
+  }
+
+  const show = new Set(nearbyIds);
+  if (servingSite) show.add(servingSite.site_id);
+  const shown = cellsF.filter(c => show.has(c.site));
+
+  const confKeys = new Set(), candKeys = new Set();
+  for (const [st, list] of [[serv.st4, serv.c4], [serv.st5, serv.c5]]) {
+    for (const c of (list || [])) (st === ST.CONF ? confKeys : candKeys).add(`${c.tech}:${c.src}`);
+  }
+
+  const rows = shown.map(c => {
+    const key = `${c.tech}:${c.src}`;
+    const serv_status = confKeys.has(key) ? "Serving" : candKeys.has(key) ? "Candidate" : "-";
+    const match = confKeys.has(key) ? ST.CONF : candKeys.has(key) ? ST.NOTCONF : "-";
+    let az = "-";
+    if (c.ind) az = "Indoor";
+    else if (c.azv && c.az != null) az = c.az;
+    const d = round1(dist.get(c.site));
+    return {
+      "Site ID": c.site, "Site Name": c.siteName ?? "", "Cell ID": cellId(c), "Cell Name": c.name,
+      "Technology": c.tech, "Longitude": round6(c.lo), "Latitude": round6(c.la), "Azimuth": az,
+      "Distance (m)": d, "Serving Status": serv_status, "Match Status": match,
+      "Label": servingSite && servingSite.outside && c.site === servingSite.site_id ? servingSite.label : "",
+      _dist: d, _cellId: cellId(c),
+    };
+  }).sort((a, b) => a._dist - b._dist || a.Technology.localeCompare(b.Technology) || String(a._cellId).localeCompare(String(b._cellId)));
+
+  // Sektor: hanya cell tampilan, outdoor, azimuth valid, beamwidth valid atau fallback
+  const fans = [];
+  const skipped = [];
+  for (const c of shown) {
+    if (c.ind) { skipped.push("Indoor"); continue; }
+    if (!c.azv || c.az == null) { skipped.push("Azimuth tidak valid"); continue; }
+    let bw, bwSource;
+    if (c.bwv && c.bw != null && c.bw > 0 && c.bw <= 360) { bw = c.bw; bwSource = "Database"; }
+    else if (opts.fallbackBw) { bw = opts.fallbackBw; bwSource = "Estimasi (fallback)"; }
+    else { skipped.push("Beamwidth tidak tersedia"); continue; }
+    const site = index.siteById.get(c.site);
+    const [rad, radSource] = sectorRadiusFor(c, opts.sectorRadius ?? null);
+    fans.push({
+      label: `${c.tech} ${c.name}`, cell_name: c.name, tech: c.tech,
+      color: c.tech === "4G" ? "#2563eb" : "#f97316",
+      azimuth: c.az, beamwidth: bw, beamwidth_source: bwSource, radius_m: round1(rad), radius_source: radSource,
+      polygon: sectorPolygon(site.lon, site.lat, c.az, bw, rad),
+      direction: directionLine(site.lon, site.lat, c.az),
+    });
+  }
+
+  const nearest = nearby.length ? { site_id: nearby[0].id, site_name: nearby[0].name, dist_m: round1(dist.get(nearby[0].id)) } : null;
+  const message = nearby.length === 0
+    ? (radius === 1000 ? "No Site Found Within 1 KM" : `No Site Found Within ${radius} M`) : null;
+
+  return {
+    input: { lon, lat, radius_m: radius, tech_filter: tech },
+    message, sites_found: nearby.length, nearest_site: nearest, serving_site: servingSite,
+    serving_4g_status: serv.st4, serving_5g_status: serv.st5, notes: serv.notes,
+    sites: [...show].map(id => { const s = index.siteById.get(id); return { site_id: id, site_name: s.name, lat: s.lat, lon: s.lon, dist_m: round1(dist.get(id)) }; }),
+    table: rows.map(({ _dist, _cellId, ...rest }) => rest),
+    fans,
+    fan_summary: { drawn: fans.length, skipped: skipped.length },
+  };
+}
+
+function round6(x) { return Math.round(x * 1e6) / 1e6; }
+
+// ---- Parsing OCR GNetTrack ----
+const SIM_HEADER = /SIM\s*([12])\s*Operator\s*[:;]?\s*([^\n\r]*)/gi;
+const TELKOMSEL = /telkom|tsel/i;
+
+function splitSimBlocks(text) {
+  const matches = [...text.matchAll(SIM_HEADER)];
+  return matches.map((m, i) => {
+    const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+    return { sim: m[1], operator: m[2].trim(), text: text.slice(m.index, end) };
+  });
+}
+
+function inRange(key, v) {
+  if (v == null) return null;
+  const [lo, hi] = RANGES[key];
+  return lo <= v && v <= hi ? v : null;
+}
+
+function parseGnetText(text) {
+  text = text || "";
+  const warnings = [];
+  const fields = { enb_id: null, local_cell_id: null, earfcn: null, pci_lte: null, nr_pci: null, dl_arfcn: null,
+                   gps_lon: null, gps_lat: null, network_type: null, band: null, tac: null };
+  const lon = text.match(/Longitude\s*[:;]?\s*(-?\d{1,3}\.\d+)/i);
+  const lat = text.match(/Latitude\s*[:;]?\s*(-?\d{1,3}\.\d+)/i);
+  if (lon) fields.gps_lon = lon[1]; else warnings.push("GPS Longitude tidak terbaca.");
+  if (lat) fields.gps_lat = lat[1]; else warnings.push("GPS Latitude tidak terbaca.");
+
+  const blocks = splitSimBlocks(text);
+  const tsel = blocks.filter(b => TELKOMSEL.test(b.operator));
+  let simOperator = null;
+  if (!blocks.length) warnings.push("Blok SIM tidak terbaca. Serving cell tidak diisi.");
+  else if (!tsel.length) warnings.push("Tidak ada SIM Telkomsel yang terbaca. Serving cell tidak diisi.");
+  else {
+    if (tsel.length > 1) warnings.push("Lebih dari satu SIM Telkomsel terbaca. Periksa screenshot.");
+    simOperator = tsel[0].operator;
+    parseBlock(tsel[0].text, fields, warnings);
+  }
+
+  if (fields.enb_id != null && fields.local_cell_id != null) {
+    const cross = text.match(/(\d{4,8})\s*-\s*(\d{1,3})/);
+    if (cross && (Number(cross[1]) !== fields.enb_id || Number(cross[2]) !== fields.local_cell_id)) {
+      warnings.push(`CELLID di tabel (${cross[1]}-${cross[2]}) tidak sama dengan eNB/CID (${fields.enb_id}-${fields.local_cell_id}). Periksa manual.`);
+    }
+  }
+  return { fields, warnings, sim_operator: simOperator, raw_text: text };
+}
+
+function parseBlock(block, f, warnings) {
+  const num = (re) => { const m = block.match(re); return m ? Number(m[1]) : null; };
+  const enb = inRange("enb_id", num(/eNB\s*[:;]?\s*(\d{4,8})\b/i));
+  const cid = inRange("local_cell_id", num(/\bCID\s*[:;]?\s*(\d{1,3})\b/i));
+  f.enb_id = enb; f.local_cell_id = cid;
+
+  const pci = block.match(/PCI\s*[:;]?\s*(\d{1,4})\s*\/\s*(\d{1,4})/i);
+  if (pci) { f.nr_pci = inRange("nr_pci", Number(pci[1])); f.pci_lte = inRange("pci_lte", Number(pci[2])); }
+  else f.pci_lte = inRange("pci_lte", num(/PCI\s*[:;]?\s*(\d{1,4})\b/i));
+
+  const arf = block.match(/ARFCN\s*[:;]?\s*(\d{3,7})\s*\/\s*(\d{3,7})/i);
+  if (arf) { f.dl_arfcn = inRange("dl_arfcn", Number(arf[1])); f.earfcn = inRange("earfcn", Number(arf[2])); }
+  else f.earfcn = inRange("earfcn", num(/ARFCN\s*[:;]?\s*(\d{3,7})\b/i));
+
+  const net = block.match(/Type\s*[:;]?\s*(5G\s*NSA|5G\s*SA|4G|LTE)/i);
+  if (net) f.network_type = net[1].replace(/\s+/g, " ").toUpperCase();
+  const band = block.match(/BAND\s*[:;]?\s*([NL]\d{1,3})/i);
+  if (band) f.band = band[1].toUpperCase();
+  const tac = block.match(/TAC\s*[:;]?\s*(\d{1,6})\b/i);
+  if (tac) f.tac = tac[1];
+
+  if (f.enb_id == null && f.local_cell_id == null) warnings.push("eNB dan CID SIM Telkomsel tidak terbaca. Serving cell tidak diisi.");
+  else if (f.enb_id == null || f.local_cell_id == null) warnings.push("Sebagian identitas cell tidak terbaca (eNB atau CID). Lengkapi secara manual.");
+}
+// CORE-END
+</script>
+
+<script>
+// ===================== UI =====================
+const $ = id => document.getElementById(id);
+const SERVING_FIELDS = [
+  ["enb_id", "eNB ID", true], ["local_cell_id", "CID", true], ["earfcn", "EARFCN LTE", true],
+  ["pci_lte", "PCI LTE", true], ["nr_pci", "PCI NR", true], ["dl_arfcn", "NR-ARFCN", true],
+];
+const OCR_LABELS = {
+  enb_id: "eNB ID (LTE anchor)", local_cell_id: "CID (Local Cell ID)", earfcn: "EARFCN LTE",
+  pci_lte: "PCI LTE", nr_pci: "PCI NR", dl_arfcn: "NR-ARFCN (DL)", gps_lon: "GPS Longitude",
+  gps_lat: "GPS Latitude", network_type: "Tipe jaringan", band: "Band", tac: "TAC (SIM Telkomsel)",
+};
+
+const state = { index: null, dbMeta: null, last: null, map: null, layer: null, capUrl: null };
+
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function showError(msg) { const e = $("error"); e.textContent = msg; e.hidden = false; window.scrollTo({ top: 0, behavior: "smooth" }); }
+function clearError() { $("error").hidden = true; $("error").textContent = ""; }
+
+/* ---------- IndexedDB: simpan database di HP ---------- */
+const IDB = { name: "rno-mobile", store: "kv" };
+function idbOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(IDB.name, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(IDB.store);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbPut(key, value) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB.store, "readwrite");
+    tx.objectStore(IDB.store).put(value, key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function idbGet(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const req = db.transaction(IDB.store).objectStore(IDB.store).get(key);
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function idbDelete(key) {
+  const db = await idbOpen();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB.store, "readwrite");
+    tx.objectStore(IDB.store).delete(key);
+    tx.oncomplete = () => res();
+    tx.onerror = () => rej(tx.error);
+  });
+}
+
+/* ---------- Database ---------- */
+function setDatabase(payload, meta) {
+  if (!payload || payload.format !== "rno-gcell-mobile") throw new Error("File bukan gcell_mobile.json dari export_for_phone.py.");
+  state.index = buildIndex(payload);
+  state.dbMeta = meta;
+  const n4 = (payload["4G"] || []).length, n5 = (payload["5G"] || []).length;
+  $("db-badge").textContent = `4G ${n4} · 5G ${n5} cell`;
+  $("db-info").textContent = `Diekspor: ${payload.exported_at || "-"} · ${meta.name} (${(meta.size / 1e6).toFixed(1)} MB)`;
+  $("db-clear").hidden = false;
+}
+
+async function loadDbFile(file) {
+  clearError();
+  $("db-info").textContent = "Membaca database...";
+  try {
+    const payload = JSON.parse(await file.text());
+    setDatabase(payload, { name: file.name, size: file.size });
+    await idbPut("gcell", { payload, name: file.name, size: file.size });
+  } catch (err) {
+    showError(err.message || String(err));
+    $("db-info").textContent = "";
+  }
+}
+
+async function restoreDb() {
+  try {
+    const saved = await idbGet("gcell");
+    if (saved) setDatabase(saved.payload, { name: saved.name, size: saved.size });
+  } catch (err) {
+    showError("Database tersimpan tidak bisa dibaca. Upload ulang file JSON. " + (err.message || ""));
+  }
+}
+
+async function clearDb() {
+  await idbDelete("gcell");
+  state.index = null;
+  $("db-badge").textContent = "Belum ada database";
+  $("db-info").textContent = "Database dihapus dari HP ini.";
+  $("db-clear").hidden = true;
+}
+
+/* ---------- Koordinat ---------- */
+function setHint(msg, isError = false) {
+  const h = $("coord-hint"); h.textContent = msg; h.style.color = isError ? "var(--danger)" : "";
+}
+function setCoords(lon, lat) {
+  $("lon").value = lon; $("lat").value = lat;
+  $("coord-text").value = `${lat}, ${lon}`;
+}
+function readCoords() {
+  const lonS = $("lon").value.trim(), latS = $("lat").value.trim();
+  if (lonS && latS) {
+    const lon = parseNumberField(lonS, "Longitude"), lat = parseNumberField(latS, "Latitude");
+    return validateCoord(lon, lat);
+  }
+  return parseCoordText($("coord-text").value);
+}
+function onCoordTextChange() {
+  const t = $("coord-text").value.trim();
+  if (!t) { setHint(""); return; }
+  try {
+    const { lon, lat } = parseCoordText(t);
+    $("lon").value = lon; $("lat").value = lat;
+    setHint(`Terbaca: lon ${lon}, lat ${lat}`);
+  } catch (err) { setHint(err.message, true); }
+}
+function useGeolocation() {
+  if (!navigator.geolocation) { showError("Browser ini tidak mendukung lokasi."); return; }
+  setHint("Mengambil lokasi HP...");
+  navigator.geolocation.getCurrentPosition(
+    p => {
+      setCoords(p.coords.longitude.toFixed(6), p.coords.latitude.toFixed(6));
+      setHint(`Lokasi HP diambil. Akurasi ±${Math.round(p.coords.accuracy)} m.`);
+    },
+    e => showError("Lokasi tidak tersedia: " + e.message + "\nPastikan halaman dibuka lewat HTTPS dan izin lokasi diberikan."),
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+  );
+}
+
+/* ---------- OCR ---------- */
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("Gagal memuat OCR dari internet. Coba lagi saat tersambung."));
+    document.head.appendChild(s);
+  });
+}
+
+// Pra-proses: skala 2x, grayscale, inversi bila tema gelap
+function imageToCanvas(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const longest = Math.max(img.width, img.height);
+      const scale = Math.min(2, 3000 / longest);
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      const data = ctx.getImageData(0, 0, c.width, c.height);
+      const px = data.data;
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const g = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+        px[i] = px[i + 1] = px[i + 2] = g; sum += g;
+      }
+      const invert = sum / (px.length / 4) < 128;
+      if (invert) for (let i = 0; i < px.length; i += 4) { px[i] = 255 - px[i]; px[i + 1] = 255 - px[i + 1]; px[i + 2] = 255 - px[i + 2]; }
+      ctx.putImageData(data, 0, 0);
+      res(c);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("Gambar tidak dapat dibaca.")); };
+    img.src = url;
+  });
+}
+
+async function runOcr(file) {
+  $("ocr-status").textContent = "Membaca screenshot (OCR), bisa beberapa detik...";
+  $("ocr-result").innerHTML = "";
+  try {
+    if (!window.Tesseract) await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js");
+    const canvas = await imageToCanvas(file);
+    const worker = await Tesseract.createWorker("eng");
+    await worker.setParameters({ tessedit_pageseg_mode: "4" });
+    const { data } = await worker.recognize(canvas);
+    await worker.terminate();
+    applyOcr(parseGnetText(data.text));
+    $("ocr-status").textContent = "OCR selesai. Periksa hasil sebelum mencari.";
+  } catch (err) {
+    $("ocr-status").textContent = "";
+    $("ocr-result").innerHTML = `<p class="error">${esc(err.message)}</p>`;
+  }
+}
+
+function applyOcr(result) {
+  const f = result.fields;
+  for (const [key] of SERVING_FIELDS) $("f_" + key).value = f[key] ?? "";
+  $("f_gps_lon").value = f.gps_lon ?? "";
+  $("f_gps_lat").value = f.gps_lat ?? "";
+  $("ocr-raw").textContent = result.raw_text;
+
+  const rows = Object.keys(OCR_LABELS).map(key => {
+    const v = f[key];
+    const cell = v == null ? '<span class="nd">Not Detected</span>' : esc(v);
+    return `<tr><td>${esc(OCR_LABELS[key])}</td><td class="v">${cell}</td></tr>`;
+  }).join("");
+  const warn = result.warnings.length
+    ? "<ul class='ocr-warn'>" + result.warnings.map(w => `<li>${esc(w)}</li>`).join("") + "</ul>" : "";
+  const op = result.sim_operator ? `<p class="hint">SIM terpakai: ${esc(result.sim_operator)}</p>` : "";
+  $("ocr-result").innerHTML = op + `<table class="ocr-table">${rows}</table>` + warn;
+}
+
+function onCaptureChosen() {
+  const file = $("cap-file").files[0];
+  if (!file) return;
+  if (state.capUrl) URL.revokeObjectURL(state.capUrl);
+  state.capUrl = URL.createObjectURL(file);
+  $("cap-preview").src = state.capUrl;
+  $("cap-preview").hidden = false;
+  runOcr(file);
+}
+
+/* ---------- Serving manual ---------- */
+function readServing() {
+  const out = {};
+  for (const [key, label] of SERVING_FIELDS) out[key] = parseNumberField($("f_" + key).value, label, { integer: true });
+  out.gnb_id = null; out.nr_cell_id = null;
+  return out;
+}
+
+/* ---------- Cari ---------- */
+function runSearch() {
+  clearError();
+  if (!state.index) { showError("Upload database gcell_mobile.json terlebih dahulu."); return; }
+  let lon, lat, serving, sectorRadius;
+  try {
+    ({ lon, lat } = readCoords());
+    serving = readServing();
+    sectorRadius = parseNumberField($("sector-radius").value, "Radius sektor", { integer: true });
+    if (sectorRadius != null && (sectorRadius < MIN_SECTOR_M || sectorRadius > MAX_SECTOR_M)) {
+      throw new Error(`Radius sektor harus antara ${MIN_SECTOR_M} dan ${MAX_SECTOR_M} meter.`);
+    }
+  } catch (err) { showError(err.message); return; }
+
+  const radius = Number($("radius").value);
+  const tech = $("tech").value;
+  const hasServing = Object.values(serving).some(v => v != null);
+  const res = analyzePoint(state.index, lon, lat, radius, tech, hasServing ? serving : null, { sectorRadius });
+  state.last = { lon, lat, radius, tech, res };
+  renderResult(res);
+}
+
+/* ---------- Render ---------- */
+function ensureMap() {
+  if (state.map) return;
+  state.map = L.map("map").setView([-6.43, 106.84], 16);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(state.map);
+  state.layer = L.layerGroup().addTo(state.map);
+  state.map.on("click", e => { setCoords(e.latlng.lng.toFixed(6), e.latlng.lat.toFixed(6)); setHint(""); });
+}
+
+function renderMap(res) {
+  ensureMap();
+  state.layer.clearLayers();
+  const { lat, lon } = res.input;
+  L.circleMarker([lat, lon], { radius: 7, color: "#dc2626", fillColor: "#dc2626", fillOpacity: 1 }).bindTooltip("Input").addTo(state.layer);
+  L.circle([lat, lon], { radius: res.input.radius_m, color: "#64748b", dashArray: "4 4", fill: false }).addTo(state.layer);
+
+  const nearestId = res.nearest_site ? res.nearest_site.site_id : null;
+  const servingId = res.serving_site ? res.serving_site.site_id : null;
+  const byId = new Map(res.sites.map(s => [s.site_id, s]));
+  for (const s of res.sites) {
+    const isNearest = s.site_id === nearestId;
+    L.circleMarker([s.lat, s.lon], {
+      radius: isNearest ? 9 : 6, color: isNearest ? "#15803d" : "#334155",
+      fillColor: isNearest ? "#22c55e" : "#94a3b8", fillOpacity: .9,
+    }).bindTooltip(`${esc(s.site_id)} · ${s.dist_m} m${isNearest ? " (terdekat)" : ""}`).addTo(state.layer);
+  }
+  if (res.serving_site && byId.has(servingId)) {
+    const s = byId.get(servingId);
+    L.circleMarker([s.lat, s.lon], { radius: 11, color: "#7e22ce", fillColor: "#a855f7", fillOpacity: .85, weight: 3 })
+      .bindTooltip(`Serving site: ${esc(s.site_id)}`).addTo(state.layer);
+  }
+  if (nearestId && byId.has(nearestId)) {
+    const s = byId.get(nearestId);
+    L.polyline([[lat, lon], [s.lat, s.lon]], { color: "#15803d", dashArray: "6 4", weight: 2 }).addTo(state.layer);
+  }
+  for (const fan of res.fans) {
+    const bwNote = fan.beamwidth_source === "Database" ? "" : " (estimasi)";
+    L.polygon(fan.polygon, { color: fan.color, weight: 1, fillColor: fan.color, fillOpacity: .25 })
+      .bindTooltip(`${esc(fan.label)}<br>Az ${fan.azimuth}° · BW ${fan.beamwidth}°${bwNote} · R ${fan.radius_m} m`).addTo(state.layer);
+    L.polyline(fan.direction, { color: fan.color, weight: 2 }).addTo(state.layer);
+    L.marker(fan.direction[1], {
+      icon: L.divIcon({ className: "cell-label", html: esc(fan.cell_name), iconSize: null }), interactive: false,
+    }).addTo(state.layer);
+  }
+  state.map.setView([lat, lon], 16);
+}
+
+function renderResult(res) {
+  renderMap(res);
+
+  const n = res.nearest_site, sv = res.serving_site;
+  const kv = [
+    ["Input", `${res.input.lon}, ${res.input.lat}`],
+    ["Radius", `${res.input.radius_m} m`],
+    ["Site dalam radius", res.sites_found],
+    ["Site terdekat", n ? `${esc(n.site_id)} (${n.dist_m} m)` : "-"],
+    ["Serving site", sv ? `${esc(sv.site_id)} (${sv.dist_m} m)${sv.label ? "<br>" + esc(sv.label) : ""}` : "-"],
+    ["Status serving 4G", res.serving_4g_status || "-"],
+    ["Status serving 5G", res.serving_5g_status || "-"],
+    ["Sektor digambar", res.fan_summary.drawn],
+  ];
+  const msg = res.message ? `<p class="error">${esc(res.message)}</p>` : "";
+  $("summary").innerHTML = `<h2>Ringkasan</h2>${msg}<div class="kv">` +
+    kv.map(([k, v]) => `<div>${esc(k)}</div><div>${v}</div>`).join("") + `</div>`;
+
+  $("notes").innerHTML = res.notes.length
+    ? "<ul class='ocr-warn'>" + res.notes.map(t => `<li>${esc(t)}</li>`).join("") + "</ul>" : "";
+
+  const box = $("results");
+  if (!res.table.length) {
+    box.innerHTML = '<p class="muted">Tidak ada cell untuk ditampilkan.</p>';
+  } else {
+    box.innerHTML = res.table.map(r => {
+      const cls = r["Serving Status"] === "Serving" ? "serving" : r["Serving Status"] === "Candidate" ? "candidate" : "";
+      return `<div class="res ${cls}">
+        <div class="title">${esc(r["Cell Name"])}</div>
+        <div class="meta">${esc(r["Site ID"])} · ${esc(r["Site Name"])} · ${esc(r["Technology"])} · Cell ID ${esc(r["Cell ID"])}</div>
+        <div class="meta">${r["Distance (m)"]} m · Az ${esc(r["Azimuth"])} · ${esc(r["Serving Status"])} · ${esc(r["Match Status"])}${r["Label"] ? " · " + esc(r["Label"]) : ""}</div>
+      </div>`;
+    }).join("");
+  }
+  $("csv-btn").hidden = false;
+}
+
+function exportCsv() {
+  const res = state.last && state.last.res;
+  if (!res || !res.table.length) return;
+  const cols = ["Site ID", "Site Name", "Cell ID", "Cell Name", "Technology", "Longitude", "Latitude", "Azimuth",
+                "Distance (m)", "Serving Status", "Match Status", "Label"];
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [cols.join(","), ...res.table.map(r => cols.map(c => q(r[c])).join(","))];
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `rno_site_${Date.now()}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ---------- Init ---------- */
+document.addEventListener("DOMContentLoaded", () => {
+  ensureMap();
+  restoreDb();
+  $("db-file").addEventListener("change", e => { if (e.target.files[0]) loadDbFile(e.target.files[0]); });
+  $("db-clear").addEventListener("click", clearDb);
+  $("coord-text").addEventListener("change", onCoordTextChange);
+  $("geo-btn").addEventListener("click", useGeolocation);
+  $("cap-file").addEventListener("change", onCaptureChosen);
+  $("search-btn").addEventListener("click", runSearch);
+  $("csv-btn").addEventListener("click", exportCsv);
+});
+</script>
+</body>
+</html>
